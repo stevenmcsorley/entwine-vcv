@@ -30,6 +30,25 @@ Right-click the module to load a mono or multichannel PCM/float WAV as custom
 are stored with the patch. Default wavetables and scales can be restored from the
 same context menu.
 
+## Installation
+
+Download the `.vcvplugin` file for your computer from the
+[latest GitHub release](https://github.com/stevenmcsorley/entwine-vcv/releases/latest):
+
+- Windows: `Entwine-2.1.1-win-x64.vcvplugin`
+- Linux: `Entwine-2.1.1-lin-x64.vcvplugin`
+- macOS Apple Silicon: `Entwine-2.1.1-mac-arm64.vcvplugin`
+- macOS Intel: `Entwine-2.1.1-mac-x64.vcvplugin`
+
+Copy the downloaded file into the matching Rack plugin folder, then restart Rack:
+
+- Windows: `%LOCALAPPDATA%\Rack2\plugins-win-x64\`
+- Linux: `~/.local/share/Rack2/plugins-lin-x64/`
+- macOS Apple Silicon: `~/Library/Application Support/Rack2/plugins-mac-arm64/`
+- macOS Intel: `~/Library/Application Support/Rack2/plugins-mac-x64/`
+
+Rack will extract and load the package when it starts.
+
 ## Building
 
 Requires the [VCV Rack SDK](https://vcvrack.com/manual/Building#setting-up-your-development-environment).

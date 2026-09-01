@@ -1,7 +1,7 @@
 {
   "slug": "Entwine",
   "name": "Entwine",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "license": "GPL-3.0-or-later",
   "brand": "halfagiraf",
   "author": "Steven McSorley",
@@ -16,7 +16,7 @@
       "slug": "Entwine",
       "name": "Entwine",
       "description": "16-voice autoregressive synthesizer whose pitch and duration recursively shape one another across interlaced Pulsar and Quasar streams.",
-      "tags": ["Polyphonic", "Oscillator", "Synth Voice", "Random", "Generative"]
+      "tags": ["Polyphonic", "Oscillator", "Synth voice", "Random", "Sequencer"]
     }
   ]
 }

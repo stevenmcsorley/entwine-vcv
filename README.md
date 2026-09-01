@@ -3,7 +3,7 @@
 **A 16-voice autoregressive synthesizer for VCV Rack 2**, by halfagiraf.
 
 <p align="center">
-  <img src="res/Entwine.svg" width="320" alt="Entwine panel"/>
+  <img src="docs/Entwine-in-VCV-Rack.png" width="320" alt="Entwine module in VCV Rack"/>
 </p>
 
 Entwine generates two interlaced streams, **Arc** and **Orbit**, whose pitch and

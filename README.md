@@ -47,12 +47,6 @@ text-as-path version after editing it with:
 python tools/bake_svg_text.py res_text_backup/Entwine.svg res/Entwine.svg
 ```
 
-## Compatibility
-
-This standalone plugin uses the identifiers `Entwine/Entwine`. Development builds
-from the older collection used `AR-Helical/Helical`; existing patches using those
-pre-release identifiers continue to require that older collection.
-
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE). Panel artwork © halfagiraf.

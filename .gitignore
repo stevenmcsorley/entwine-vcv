@@ -1,0 +1,23 @@
+# Build output
+/build/
+/dist/
+*.o
+*.d
+*.bin
+plugin.dll
+plugin.so
+plugin.dylib
+
+# Rack SDK (referenced via RACK_DIR, never vendored)
+/Rack-SDK/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+__pycache__/
+*.pyc
+
+# Local scratch
+/scratch/

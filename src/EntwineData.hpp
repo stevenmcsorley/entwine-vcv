@@ -1,8 +1,8 @@
-// AUTO-GENERATED from factoryPreset/buf_wt.wav and scale.txt. Do not edit by hand.
+// Embedded default wavetable and scale data. Do not edit by hand.
 #pragma once
 #include <array>
 
-namespace helical {
+namespace entwine_data {
 
 static constexpr int WT_FRAMES = 64;
 static constexpr int WT_LEN = 256;
@@ -96,4 +96,4 @@ static const ScaleDef SCALES[NUM_SCALES] = {
 {{51,51,127},{127,0,102},1,5,{9,12,16,19,21,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}},
 };
 
-} // namespace helical
+} // namespace entwine_data

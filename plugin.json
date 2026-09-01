@@ -1,7 +1,7 @@
 {
   "slug": "Entwine",
   "name": "Entwine",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "license": "GPL-3.0-or-later",
   "brand": "halfagiraf",
   "author": "Steven McSorley",
@@ -10,12 +10,12 @@
   "pluginUrl": "https://github.com/stevenmcsorley/entwine-vcv",
   "manualUrl": "https://github.com/stevenmcsorley/entwine-vcv#readme",
   "sourceUrl": "https://github.com/stevenmcsorley/entwine-vcv",
-  "description": "Autoregressive synthesis across interlaced Arc and Orbit voice streams.",
+  "description": "Autoregressive synthesis across interlaced Pulsar and Quasar voice streams.",
   "modules": [
     {
       "slug": "Entwine",
       "name": "Entwine",
-      "description": "16-voice autoregressive synthesizer whose pitch and duration recursively shape one another across interlaced Arc and Orbit streams.",
+      "description": "16-voice autoregressive synthesizer whose pitch and duration recursively shape one another across interlaced Pulsar and Quasar streams.",
       "tags": ["Polyphonic", "Oscillator", "Synth Voice", "Random", "Generative"]
     }
   ]

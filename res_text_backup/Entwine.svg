@@ -11,7 +11,7 @@
       <stop offset="0.5" stop-color="#e6a532" stop-opacity="0.55"/>
       <stop offset="1" stop-color="#e6a532" stop-opacity="0"/>
     </linearGradient>
-    <!-- nebula clouds around Helicity: warm pink to the left, cool cyan to the right -->
+    <!-- nebula clouds around Coupling: warm pink to the left, cool cyan to the right -->
     <radialGradient id="cPink" cx="0.5" cy="0.5" r="0.5">
       <stop offset="0" stop-color="#f7a6c8" stop-opacity="0.55"/>
       <stop offset="0.45" stop-color="#c87ab4" stop-opacity="0.28"/>
@@ -51,7 +51,7 @@
   <rect width="81.28" height="128.5" fill="url(#bg)"/>
   <rect x="0.6" y="0.6" width="80.08" height="127.3" fill="none" stroke="#2b2e36" stroke-width="0.4"/>
 
-  <!-- ── nebula band behind the Helicity knob ── -->
+  <!-- ── nebula band behind the Coupling knob ── -->
   <g>
     <rect x="2" y="58" width="77.28" height="30" fill="url(#mist)"/>
     <!-- left: pink / magenta plumes -->
@@ -74,7 +74,7 @@
 
   <!-- ── gold rings around the knobs: gold over the top, silver closing the bottom ──
        Radii track the real component sizes: RoundBlackKnob is 9.6mm across, the Huge
-       (Helicity) is 18.2mm, so the rings sit ~1.5mm proud of each knob. -->
+       (Coupling) is 18.2mm, so the rings sit ~1.5mm proud of each knob. -->
   <g fill="none" stroke="#e6a532" stroke-width="0.35" opacity="0.75" stroke-linecap="round">
     <path d="M2.7,28 A6.3,6.3 0 0 1 15.3,28"/>
     <path d="M66,28 A6.3,6.3 0 0 1 78.6,28"/>
@@ -155,16 +155,16 @@
     <circle cx="72.3" cy="108.1" r="0.38"/>
   </g>
 
-  <text class="sml acc" x="9"    y="94.2">A V/OCT</text>
-  <text class="sml acc" x="18.5" y="94.2">A GATE</text>
-  <text class="sml acc" x="63"   y="94.2">O V/OCT</text>
-  <text class="sml acc" x="72.3" y="94.2">O GATE</text>
+  <text class="sml acc" x="9"    y="94.2">P V/OCT</text>
+  <text class="sml acc" x="18.5" y="94.2">P GATE</text>
+  <text class="sml acc" x="63"   y="94.2">Q V/OCT</text>
+  <text class="sml acc" x="72.3" y="94.2">Q GATE</text>
 
   <rect x="8" y="107.5" width="65.28" height="0.35" fill="url(#rule)"/>
-  <text class="lbl" x="9"    y="118.5">reloAd</text>
-  <text class="lbl" x="72.3" y="118.5">reloOd</text>
-  <text class="lbl acc" x="25"   y="118.5">Arc</text>
-  <text class="lbl acc" x="56.3" y="118.5">Orbit</text>
+  <text class="lbl" x="9"    y="118.5">Reseed</text>
+  <text class="lbl" x="72.3" y="118.5">Reseed</text>
+  <text class="lbl acc" x="25"   y="118.5">Pulsar</text>
+  <text class="lbl acc" x="56.3" y="118.5">Quasar</text>
 
   <!-- Halfagiraf signature, exactly the same scale as Bad Sector. -->
   <g transform="translate(28.5,123.0)">

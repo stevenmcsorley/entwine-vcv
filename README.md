@@ -3,31 +3,31 @@
 **A 16-voice autoregressive synthesizer for VCV Rack 2**, by halfagiraf.
 
 <p align="center">
-  <img src="docs/Entwine-in-VCV-Rack.png" width="320" alt="Entwine module in VCV Rack"/>
+  <img src="res/Entwine.svg" width="320" alt="Entwine module panel"/>
 </p>
 
-Entwine generates two interlaced streams, **Arc** and **Orbit**, whose pitch and
+Entwine generates two interlaced streams, **Pulsar** and **Quasar**, whose pitch and
 duration recursively influence their next values. It can work as a self-running
 generative voice, follow an external clock in sync mode, or emit pitch, gate and
 MIDI data to drive other instruments.
 
 ## Features
 
-- Up to 16 autoregressive wavetable voices across Arc and Orbit.
+- Up to 16 autoregressive wavetable voices across Pulsar and Quasar.
 - Independent stereo audio, V/Oct and gate outputs for both streams.
 - Root, scale, glide, spread, wavetable, envelope and coupling controls with CV.
 - Internal generative timing or external-clock synchronization.
-- Lock and separate recompute controls for the Arc and Orbit voice groups.
+- Lock and independent Reseed controls for the Pulsar and Quasar voice groups.
 - 64 built-in wavetable frames arranged as eight selectable presets.
 - Sixteen built-in scales, plus optional custom wavetable WAV and scale-file loading.
-- Optional MIDI output with Arc on channel 1 and Orbit on channel 2.
+- Optional MIDI output with Pulsar on channel 1 and Quasar on channel 2.
 - Context-menu filter, resonance, wavetable-index and note-length controls.
 
 ## File loading
 
 Right-click the module to load a mono or multichannel PCM/float WAV as custom
 256-sample wavetable frames, or load a compatible `scale.txt`. Custom file paths
-are stored with the patch. Factory wavetables and scales can be restored from the
+are stored with the patch. Default wavetables and scales can be restored from the
 same context menu.
 
 ## Building

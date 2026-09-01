@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <vector>
 
-using namespace helical;
+using namespace entwine_data;
 
 // ---- helpers ----
 static inline float fract(float x) { return x - std::floor(x); }
@@ -15,7 +15,7 @@ static inline float clampf(float x, float lo, float hi) { return x < lo ? lo : (
 static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
 // Tolerant RIFF/WAV reader: 16/24/32-bit PCM or float32, any channel count
-// mixed down to mono. Used for the SD-card wavetable stand-in.
+// mixed down to mono. Used for custom wavetable loading.
 static bool readWavMonoH(const std::string& path, std::vector<float>& out) {
 	FILE* f = std::fopen(path.c_str(), "rb");
 	if (!f) return false;
@@ -103,41 +103,38 @@ struct Voice {
 struct Entwine : Module {
 	enum ParamId {
 		POLY_PARAM, ROOT_PARAM, SCALE_PARAM, GLIDE_PARAM, SPREAD_PARAM,
-		HELICITY_PARAM, WAVE_PARAM, ENV_PARAM,
-		RELOAD_PARAM, RELOOD_PARAM, LOCK_PARAM,
+		COUPLING_PARAM, WAVE_PARAM, ENV_PARAM,
+		PULSAR_RESEED_PARAM, QUASAR_RESEED_PARAM, LOCK_PARAM,
 		PARAMS_LEN
 	};
-	// Hardware CV inputs (10) — matching the real panel exactly. The reloAd/reloOd jacks are
-	// the pair flanking the Helicity slot; the manual confirms them ("If reloOd input is
-	// unpatched, triggers on reloAd apply to all oscillators").
 	enum InputId {
 		ROOT_INPUT, POLY_INPUT, GLIDE_INPUT, SPREAD_INPUT, WAVE_INPUT,
-		ENV_INPUT, HELICITY_INPUT, LOCK_INPUT, RELOAD_INPUT, RELOOD_INPUT,
+		ENV_INPUT, COUPLING_INPUT, LOCK_INPUT, PULSAR_RESEED_INPUT, QUASAR_RESEED_INPUT,
 		INPUTS_LEN
 	};
 	enum OutputId {
-		ARC_OUTPUT, ORBIT_OUTPUT,
-		ARC_VOCT_OUTPUT, ARC_GATE_OUTPUT, ORBIT_VOCT_OUTPUT, ORBIT_GATE_OUTPUT,
+		PULSAR_OUTPUT, QUASAR_OUTPUT,
+		PULSAR_VOCT_OUTPUT, PULSAR_GATE_OUTPUT, QUASAR_VOCT_OUTPUT, QUASAR_GATE_OUTPUT,
 		OUTPUTS_LEN
 	};
 	enum LightId {
 		SCALE_LIGHT_R, SCALE_LIGHT_G, SCALE_LIGHT_B,
-		ARC_LIGHT, ORBIT_LIGHT, LOCK_LIGHT,
-		ENUMS(HELIX_LIGHTS, 3),   // the LED slit under the Helicity knob
+		PULSAR_LIGHT, QUASAR_LIGHT, LOCK_LIGHT,
+		ENUMS(COUPLING_LIGHTS, 3),
 		LIGHTS_LEN
 	};
 
-	static const int CHANNELS = 2;   // Arc, Orbit
+	static const int CHANNELS = 2;   // Pulsar, Quasar
 	static const int VOICES = 8;     // per channel
 	Voice voices[CHANNELS][VOICES];
 
-	dsp::BooleanTrigger reloadTrig, reloodTrig;
+	dsp::BooleanTrigger pulsarReseedTrig, quasarReseedTrig;
 	dsp::SchmittTrigger syncTrig;
 	int syncCount = 0;
 	float lightPhase = 0.f;
-	float arcMeter = 0.f, orbitMeter = 0.f;
+	float pulsarMeter = 0.f, quasarMeter = 0.f;
 
-	// MIDI output (Cuh expander): Arc voices on MIDI ch 1, Orbit on ch 2.
+	// MIDI output: Pulsar voices on channel 1, Quasar voices on channel 2.
 	midi::Output midiOut;
 	bool midiMono = false;     // send only 1 voice per channel (clean for KeyStep etc.)
 	float midiGate = 0.6f;     // note length as fraction of the step -> gives gate gaps
@@ -150,38 +147,37 @@ struct Entwine : Module {
 		midiOut.sendMessage(m);
 	}
 
-	// Expander params (Cuh / MIDI CC 28-32) — no front-panel controls on the hardware.
+	// Additional MIDI-controlled settings without front-panel controls.
 	int filterType = 0;          // 0 Off, 1 LP, 2 BP, 3 HP  (ccFilterType)
 	float filterCutoff = 1.f;    // 0..1 normalized                (ccCutoff)
 	float filterQ = 0.f;         // 0..1 normalized                (ccQ)
 	int wtIndex = 0;             // 0..63 wavetable frame offset    (ccIndex)
 	float noteLength = 1.f;      // duration multiplier             (ccLength)
 
-	// Dynamics defaults recovered from factory settings.txt
+	// Default per-note dynamics.
 	static constexpr float VOL_CENTER = 75.f / 127.f;
 	static constexpr float VOL_WIDTH  = 50.f / 127.f;
 
-	// Autoregressive coefficients. The firmware's exact map is not public; these set how
-	// strongly the previous duration steers the next pitch versus the innovation.
+	// Autoregressive coefficients set how strongly the previous duration steers the
+	// next pitch versus the innovation.
 	static constexpr float AR_COEF = 0.30f;
 	static constexpr float AR_INNOV = 0.35f;
 
-	// "Each group of 8 wavetables = 1 Entwine preset" — 64 frames = 8 presets of 8. Wave
-	// morphs within the selected preset; on the hardware you press + turn Scale to change
-	// preset, which has no equivalent gesture in Rack, so it lives in the context menu.
+	// Sixty-four frames form eight presets of eight. Wave morphs within the selected
+	// preset, while preset selection lives in the context menu.
 	int wtPreset = 0;
 	bool lastMono = false;
 	int lastScaleIdx = -1;
 
 	// Panel nebula: it breathes with the voices and lights up as the controls move.
-	float uiGlow = 0.f, cloudPhase = 0.f, uiHel = 0.78f;
+	float uiGlow = 0.f, cloudPhase = 0.f, uiCoupling = 0.78f;
 	float uiLastParam[8] = {};
 	bool uiFirst = true;
-	float uiArc = 0.f, uiOrbit = 0.f;
+	float uiPulsar = 0.f, uiQuasar = 0.f;
 
 	Entwine() {
 		config(PARAMS_LEN, INPUTS_LEN, OUTPUTS_LEN, LIGHTS_LEN);
-		// 0-8 per channel; the max is raised to 16 in Mono mode (Orbit unpatched).
+		// 0-8 per stream; the maximum is raised to 16 in mono mode.
 		configParam(POLY_PARAM, 0.f, 16.f, 4.f, "Polyphony", " voices");
 		getParamQuantity(POLY_PARAM)->snapEnabled = true;
 		configParam(ROOT_PARAM, -2.f, 2.f, 0.f, "Root", " oct");
@@ -189,13 +185,12 @@ struct Entwine : Module {
 		getParamQuantity(SCALE_PARAM)->snapEnabled = true;
 		configParam(GLIDE_PARAM, 0.f, 1.f, 0.1f, "Glide");
 		configParam(SPREAD_PARAM, 0.f, 1.f, 0.4f, "Spread");
-		// Duration = sqrt(Pitch) * Helicity, 0.002x..300x. Musical note lengths live near the
-		// top of that span, so the default sits high rather than at noon.
-		configParam(HELICITY_PARAM, 0.f, 1.f, 0.78f, "Coupling (note length)");
+		// Coupling spans audio-rate textures through long generative phrases.
+		configParam(COUPLING_PARAM, 0.f, 1.f, 0.78f, "Coupling (note length)");
 		configParam(WAVE_PARAM, 0.f, 1.f, 0.f, "Wave");
 		configParam(ENV_PARAM, 0.f, 1.f, 0.5f, "Env (attack/decay)");
-		configButton(RELOAD_PARAM, "reloAd (recompute Arc)");
-		configButton(RELOOD_PARAM, "reloOd (recompute Orbit)");
+		configButton(PULSAR_RESEED_PARAM, "Reseed Pulsar");
+		configButton(QUASAR_RESEED_PARAM, "Reseed Quasar");
 		configSwitch(LOCK_PARAM, 0.f, 1.f, 0.f, "Lock", {"Off", "On"});
 
 		configInput(ROOT_INPUT, "Root V/Oct");
@@ -204,16 +199,16 @@ struct Entwine : Module {
 		configInput(SPREAD_INPUT, "Spread CV");
 		configInput(WAVE_INPUT, "Wave CV");
 		configInput(ENV_INPUT, "Env CV");
-		configInput(HELICITY_INPUT, "Coupling CV");
+		configInput(COUPLING_INPUT, "Coupling CV");
 		configInput(LOCK_INPUT, "Lock gate");
-		configInput(RELOAD_INPUT, "reloAd trigger (all voices if reloOd unpatched)");
-		configInput(RELOOD_INPUT, "reloOd trigger (Orbit voices)");
-		configOutput(ARC_OUTPUT, "Arc (audio)");
-		configOutput(ORBIT_OUTPUT, "Orbit (audio)");
-		configOutput(ARC_VOCT_OUTPUT, "Arc V/Oct");
-		configOutput(ARC_GATE_OUTPUT, "Arc gate");
-		configOutput(ORBIT_VOCT_OUTPUT, "Orbit V/Oct");
-		configOutput(ORBIT_GATE_OUTPUT, "Orbit gate");
+		configInput(PULSAR_RESEED_INPUT, "Reseed Pulsar trigger");
+		configInput(QUASAR_RESEED_INPUT, "Reseed Quasar trigger");
+		configOutput(PULSAR_OUTPUT, "Pulsar audio");
+		configOutput(QUASAR_OUTPUT, "Quasar audio");
+		configOutput(PULSAR_VOCT_OUTPUT, "Pulsar V/Oct");
+		configOutput(PULSAR_GATE_OUTPUT, "Pulsar gate");
+		configOutput(QUASAR_VOCT_OUTPUT, "Quasar V/Oct");
+		configOutput(QUASAR_GATE_OUTPUT, "Quasar gate");
 
 		for (int c = 0; c < CHANNELS; c++)
 			for (int v = 0; v < VOICES; v++)
@@ -260,9 +255,7 @@ struct Entwine : Module {
 		}
 	}
 
-	// ── SD-card stand-ins: user wavetable and scale file, loaded from disk ──
-	// The hardware reads buf_wt.wav (64 frames x 256 samples) and scale.txt
-	// from its SD card; here the context menu loads the same file formats.
+	// User wavetable and scale files loaded from disk.
 	float userWT[WT_FRAMES][WT_LEN] = {};
 	int userWtFrames = 0;
 	bool wtUserLoaded = false;
@@ -276,7 +269,7 @@ struct Entwine : Module {
 		return (scalesUserLoaded ? userScales : SCALES)[clamp(idx, 0, NUM_SCALES - 1)];
 	}
 
-	// Slice a mono WAV into 256-sample frames, hardware wavetable format.
+	// Slice a mono WAV into 256-sample wavetable frames.
 	bool loadWavetable(const std::string& path) {
 		std::vector<float> s;
 		if (!readWavMonoH(path, s)) return false;
@@ -292,7 +285,7 @@ struct Entwine : Module {
 		return true;
 	}
 
-	// Parse the firmware's scale.txt: per line "cAr cAg cAb cBr cBg cBb flag offsets..."
+	// Parse scale.txt: per line "cAr cAg cAb cBr cBg cBb flag offsets..."
 	bool loadScales(const std::string& path) {
 		FILE* fp = std::fopen(path.c_str(), "r");
 		if (!fp) return false;
@@ -313,7 +306,7 @@ struct Entwine : Module {
 		}
 		std::fclose(fp);
 		if (n < 1) return false;
-		// unfilled slots keep the factory definitions, like a partial SD file would
+		// Unfilled slots retain the embedded defaults.
 		for (int i = 0; i < NUM_SCALES; i++)
 			userScales[i] = (i < n) ? parsed[i] : SCALES[i];
 		scalesUserLoaded = true;
@@ -359,19 +352,15 @@ struct Entwine : Module {
 		return S.offsets[k + (j % m)] + 12 * (j / m);
 	}
 
-	// Helicity is a multiplier on the note duration:
-	//     "Duration = sqrt(Pitch) * Helicity"   Range: 0.002x to 300x   (manual)
-	// Pitch is the note's frequency and the product is in milliseconds, which is why the
-	// bottom of the range reaches audio rate — and why Helicity is the module's only
-	// audio-rate CV input. Turning Helicity UP makes notes LONGER.
-	static float helicityMul(float knob01) {
+	// Coupling maps exponentially from audio-rate textures to long note durations.
+	static float couplingMul(float knob01) {
 		return std::exp(lerpf(std::log(0.002f), std::log(300.f), clampf(knob01, 0.f, 1.f)));
 	}
 	static constexpr float DUR_MIN = 0.0004f;
 	static constexpr float DUR_MAX = 30.f;
 
-	// Spread "sets pitch range when calculating from duration. CCW: Only root note.
-	// CW: Range up to G9" — G9 is ~67 semitones above a C4 root.
+	// Spread controls the pitch range calculated from duration, from the root alone
+	// to roughly six octaves above it.
 	int spreadRange(int scaleIdx, float spread) {
 		const ScaleDef& S = scaleAt(scaleIdx);
 		int k = 0; while (k < S.count && S.offsets[k] < 12) k++;
@@ -381,20 +370,16 @@ struct Entwine : Module {
 		return 1 + (int) std::round(spread * (maxDeg - 1));
 	}
 
-	// One autoregressive step. Per the manual: "each oscillator's previous pitch determines
-	// the next duration, and the previous duration influences the next pitch. This helical
-	// influence from past to future creates natural-sounding sequences rather than random
-	// ones." An autoregressive model regresses on its own past and adds an innovation — the
-	// innovation is what keeps it moving, the regression is what makes it correlated rather
-	// than white. `helicityX` is the 0.002x..300x multiplier, NOT the raw knob.
+	// One autoregressive step. Each voice's previous pitch shapes its next duration,
+	// while its previous duration shapes the next pitch. Innovation keeps the sequence
+	// moving; regression gives it continuity instead of white-noise jumps.
 	void recalcVoice(Voice& vo, int scaleIdx, float rootVoct, float spread,
-	                 float helicityX, float env, float lengthMul, bool locked) {
+	                 float couplingX, float env, float lengthMul, bool locked) {
 		int range = spreadRange(scaleIdx, spread);
 
 		if (!locked) {
-			// The previous DURATION steers the next pitch: a long/high last note pushes the
-			// line up, a short/low one pushes it down, so it moves in arcs that wrap around
-			// the Spread range rather than jumping about — the "helical" motion.
+			// The previous duration steers the next pitch, producing a correlated path
+			// through the selected spread instead of unrelated jumps.
 			vo.pState = wrap01(vo.pState + (vo.dState - 0.5f) * AR_COEF
 			                             + (vo.rng.next() - 0.5f) * AR_INNOV);
 		}
@@ -403,11 +388,9 @@ struct Entwine : Module {
 		if (deg >= range) deg = range - 1;
 		vo.targetVoct = rootVoct + scaleSemitone(scaleIdx, deg) / 12.f;
 
-		// The other half of the cross-coupling: this note's PITCH sets its duration.
-		//     Duration = sqrt(Pitch) * Helicity      (ms)
-		// so high notes ring longer, and low Helicity drives the durations to audio rate.
+		// The other half of the cross-coupling: this note's pitch sets its duration.
 		float freqHz = clampf(dsp::FREQ_C4 * std::pow(2.f, vo.targetVoct), 1.f, 20000.f);
-		vo.durationSec = clampf(std::sqrt(freqHz) * helicityX * 0.001f * lengthMul, DUR_MIN, DUR_MAX);
+		vo.durationSec = clampf(std::sqrt(freqHz) * couplingX * 0.001f * lengthMul, DUR_MIN, DUR_MAX);
 
 		// Remember where this note's duration sits within the range currently reachable, so
 		// the next regression has a meaningful 0..1 regressor.
@@ -425,16 +408,12 @@ struct Entwine : Module {
 	void process(const ProcessArgs& args) override {
 		float dt = args.sampleTime;
 
-		// "Entwine splits its output into Arc and Orbit for every 8 voices. If Orbit is
-		// unpatched, Arc outputs all voices in Mono mode." Poly is then 0-16 rather than 0-8.
-		// Mono mode must only engage when the Orbit side is COMPLETELY unused: the Orbit
-		// V/Oct and Gate CV outs (our VCV additions) come from the Orbit voice bank, so a
-		// patch that drives external gear from them — with the Orbit audio jack unpatched —
-		// must still run those voices, or O V/OCT, O GATE and MIDI ch2 all go dead.
-		bool orbitUsed = outputs[ORBIT_OUTPUT].isConnected()
-		              || outputs[ORBIT_VOCT_OUTPUT].isConnected()
-		              || outputs[ORBIT_GATE_OUTPUT].isConnected();
-		bool mono = !orbitUsed;
+		// When Quasar is unused, Pulsar combines both eight-voice banks in mono mode.
+		// Any Quasar audio, pitch, or gate connection keeps the streams independent.
+		bool quasarUsed = outputs[QUASAR_OUTPUT].isConnected()
+		               || outputs[QUASAR_VOCT_OUTPUT].isConnected()
+		               || outputs[QUASAR_GATE_OUTPUT].isConnected();
+		bool mono = !quasarUsed;
 		if (mono != lastMono) {
 			lastMono = mono;
 			if (ParamQuantity* pq = getParamQuantity(POLY_PARAM)) {
@@ -444,10 +423,9 @@ struct Entwine : Module {
 			}
 		}
 
-		// "Poly at 0 with a clock into the Poly CV = sync mode: voices recalculate
-		// on the (divided) clock instead of free-running, and Helicity acts as the
-		// clock divider." The Poly jack is a clock in that state, not a count.
-		float helKnobRaw = params[HELICITY_PARAM].getValue();
+		// With Poly at zero, the Poly input becomes a clock and Coupling selects
+		// the clock division.
+		float couplingKnobRaw = params[COUPLING_PARAM].getValue();
 		bool syncMode = ((int) std::round(params[POLY_PARAM].getValue()) == 0)
 		             && inputs[POLY_INPUT].isConnected();
 		bool syncTickNow = false;
@@ -456,7 +434,7 @@ struct Entwine : Module {
 			poly = mono ? 2 * VOICES : VOICES;   // all voices, stepped by the clock
 			if (syncTrig.process(inputs[POLY_INPUT].getVoltage(), 0.1f, 1.f)) {
 				static const int divs[8] = {1, 2, 3, 4, 6, 8, 12, 16};
-				int d = divs[clamp((int) (helKnobRaw * 8.f), 0, 7)];
+				int d = divs[clamp((int) (couplingKnobRaw * 8.f), 0, 7)];
 				if (++syncCount >= d) { syncCount = 0; syncTickNow = true; }
 			}
 		} else {
@@ -473,29 +451,26 @@ struct Entwine : Module {
 
 		float glide = clampf(params[GLIDE_PARAM].getValue() + inputs[GLIDE_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
 		float spread = clampf(params[SPREAD_PARAM].getValue() + inputs[SPREAD_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
-		float helKnob = clampf(params[HELICITY_PARAM].getValue() + inputs[HELICITY_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
-		float helicityX = helicityMul(helKnob);
+		float couplingKnob = clampf(params[COUPLING_PARAM].getValue() + inputs[COUPLING_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
+		float couplingX = couplingMul(couplingKnob);
 		float wave = clampf(params[WAVE_PARAM].getValue() + inputs[WAVE_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
 		float env = clampf(params[ENV_PARAM].getValue() + inputs[ENV_INPUT].getVoltage() * 0.1f, 0.f, 1.f);
-		// Wave "smoothly morphs between wavetable frames in a preset" — one preset is 8 frames.
+		// Wave smoothly morphs between the eight frames in a preset.
 		float morph = clampf(wtPreset * 8.f + wave * 7.f + wtIndex, 0.f, activeWtFrames() - 1.f);
 
 		bool locked = params[LOCK_PARAM].getValue() > 0.5f
 		           || (inputs[LOCK_INPUT].isConnected() && inputs[LOCK_INPUT].getVoltage() >= 1.f);
 
-		// "If Lock is ON (switch up), the scale changes instantly. If OFF (switch down),
-		// changes apply after the note ends." With Lock off the new scale is simply picked up
-		// at the next recalculation, which happens at the end of the note anyway.
+		// With Lock on, scale changes land immediately. With Lock off, the new scale is
+		// picked up at the next natural recalculation.
 		bool scaleChanged = (scaleIdx != lastScaleIdx);
 		lastScaleIdx = scaleIdx;
 
-		// reloAd / reloOd: buttons and CV inputs (both are on the hardware panel).
-		bool reloadArc = reloadTrig.process(params[RELOAD_PARAM].getValue() > 0.5f
-			|| (inputs[RELOAD_INPUT].isConnected() && inputs[RELOAD_INPUT].getVoltage() >= 1.f));
-		bool reloadOrbit = reloodTrig.process(params[RELOOD_PARAM].getValue() > 0.5f
-			|| (inputs[RELOOD_INPUT].isConnected() && inputs[RELOOD_INPUT].getVoltage() >= 1.f));
-		// "If reloOd input is unpatched, triggers on reloAd apply to all oscillators."
-		if (reloadArc && !inputs[RELOOD_INPUT].isConnected()) reloadOrbit = true;
+		// Each Reseed button/input starts a fresh trajectory for its own stream.
+		bool reseedPulsar = pulsarReseedTrig.process(params[PULSAR_RESEED_PARAM].getValue() > 0.5f
+			|| (inputs[PULSAR_RESEED_INPUT].isConnected() && inputs[PULSAR_RESEED_INPUT].getVoltage() >= 1.f));
+		bool reseedQuasar = quasarReseedTrig.process(params[QUASAR_RESEED_PARAM].getValue() > 0.5f
+			|| (inputs[QUASAR_RESEED_INPUT].isConnected() && inputs[QUASAR_RESEED_INPUT].getVoltage() >= 1.f));
 
 		// per-voice SVF coefficients (shared cutoff/Q), computed once per sample
 		float k = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;
@@ -513,10 +488,10 @@ struct Entwine : Module {
 		float out[CHANNELS] = {0.f, 0.f};
 
 		for (int c = 0; c < CHANNELS; c++) {
-			bool forceReload = (c == 0) ? reloadArc : reloadOrbit;
+			bool forceReseed = (c == 0) ? reseedPulsar : reseedQuasar;
 			for (int v = 0; v < VOICES; v++) {
 				Voice& vo = voices[c][v];
-				// In Mono mode all 16 voices sound and are summed to Arc, so the second bank
+				// In mono mode all 16 voices sound and are summed to Pulsar, so the second bank
 				// fills only once the first is full.
 				bool shouldBeActive = mono ? ((c * VOICES + v) < poly) : (v < poly);
 				if (shouldBeActive && !vo.active) { vo.active = true; vo.envPhase = 1.f; }
@@ -526,16 +501,16 @@ struct Entwine : Module {
 				}
 
 				// In mono mode only voice 0 of each channel emits MIDI; silence any others.
-				// At low Helicity durations reach audio rate, which would flood the MIDI port
+				// At low Coupling durations reach audio rate, which would flood the MIDI port
 				// with thousands of notes a second, so notes shorter than 30ms don't articulate.
 				bool midiThisVoice = (!midiMono || v == 0) && vo.durationSec > 0.03f;
 				if (!midiThisVoice && vo.midiNote >= 0) { sendMidi(c, false, vo.midiNote, 0); vo.midiNote = -1; vo.midiGateOn = false; }
 
-				if (forceReload) vo.envPhase = 1.f;
+				if (forceReseed) vo.envPhase = 1.f;
 
 				// Lock freezes the calculation, but a scale change still lands immediately:
 				// re-quantize the held pitch without restarting the note.
-				if (locked && scaleChanged && !forceReload) {
+				if (locked && scaleChanged && !forceReseed) {
 					int range = spreadRange(scaleIdx, spread);
 					int deg = (int) (vo.pState * range);
 					if (deg >= range) deg = range - 1;
@@ -544,11 +519,11 @@ struct Entwine : Module {
 
 				if (vo.envPhase >= 1.f) {
 					// In sync mode a finished voice holds until the divided clock lands.
-					if (syncMode && !syncTickNow && !forceReload) {
+					if (syncMode && !syncTickNow && !forceReseed) {
 						vo.envPhase = 1.f;
 					} else {
-						recalcVoice(vo, scaleIdx, rootVoct, spread, helicityX, env, noteLength, locked && !forceReload);
-						// MIDI: articulate the new note (Arc=ch1, Orbit=ch2)
+						recalcVoice(vo, scaleIdx, rootVoct, spread, couplingX, env, noteLength, locked && !forceReseed);
+						// MIDI: articulate the new note (Pulsar=ch1, Quasar=ch2)
 						if (midiThisVoice) {
 							if (vo.midiNote >= 0) sendMidi(c, false, vo.midiNote, 0);
 							int note = clamp((int) std::round(vo.targetVoct * 12.f + 60.f), 0, 127);
@@ -565,10 +540,8 @@ struct Entwine : Module {
 					vo.midiGateOn = false; vo.midiNote = -1;
 				}
 
-				// Glide: "When Helicity is high: glide time = 0-1s. When Helicity is low:
-				// glide time depends on the current note length." Both follow from capping
-				// the glide time at this voice's own duration — long notes reach the full
-				// second, short ones scale down with the note.
+				// Glide is capped by the current note duration: long notes can reach the
+				// full glide time while short notes scale it down naturally.
 				float tau = glide * glide * std::min(1.f, vo.durationSec);
 				float glideCoef = (tau < 1e-5f) ? 1.f : (1.f - std::exp(-dt / tau));
 				vo.voct += (vo.targetVoct - vo.voct) * glideCoef;
@@ -579,7 +552,7 @@ struct Entwine : Module {
 				if (vo.phase >= 1.f) vo.phase -= std::floor(vo.phase);
 				float s = wtSample(vo.phase, morph);
 
-				// per-voice filter (Cuh expander: Cutoff/Q/Type)
+				// Per-voice filter controlled from the context menu or MIDI.
 				if (filterType) {
 					float v0 = s;
 					float v3 = v0 - vo.ic2;
@@ -599,22 +572,22 @@ struct Entwine : Module {
 			}
 		}
 
-		// In Mono mode "Arc outputs all voices" — both banks are summed to Arc.
-		float arc = 5.f * std::tanh((mono ? (out[0] + out[1]) : out[0]) * 0.4f);
-		float orbit = mono ? 0.f : 5.f * std::tanh(out[1] * 0.4f);
-		outputs[ARC_OUTPUT].setVoltage(arc);
-		outputs[ORBIT_OUTPUT].setVoltage(orbit);
+		// In mono mode both banks are summed to Pulsar.
+		float pulsar = 5.f * std::tanh((mono ? (out[0] + out[1]) : out[0]) * 0.4f);
+		float quasar = mono ? 0.f : 5.f * std::tanh(out[1] * 0.4f);
+		outputs[PULSAR_OUTPUT].setVoltage(pulsar);
+		outputs[QUASAR_OUTPUT].setVoltage(quasar);
 
-		// Per-channel mono pitch + gate CV (from voice 0) to drive external gear
-		Voice& a0 = voices[0][0];
-		Voice& o0 = voices[1][0];
-		outputs[ARC_VOCT_OUTPUT].setVoltage(a0.active ? a0.voct : 0.f);
-		outputs[ARC_GATE_OUTPUT].setVoltage((a0.active && a0.envPhase < midiGate) ? 10.f : 0.f);
-		outputs[ORBIT_VOCT_OUTPUT].setVoltage(o0.active ? o0.voct : 0.f);
-		outputs[ORBIT_GATE_OUTPUT].setVoltage((o0.active && o0.envPhase < midiGate) ? 10.f : 0.f);
+		// Per-stream mono pitch and gate CV from voice zero.
+		Voice& p0 = voices[0][0];
+		Voice& q0 = voices[1][0];
+		outputs[PULSAR_VOCT_OUTPUT].setVoltage(p0.active ? p0.voct : 0.f);
+		outputs[PULSAR_GATE_OUTPUT].setVoltage((p0.active && p0.envPhase < midiGate) ? 10.f : 0.f);
+		outputs[QUASAR_VOCT_OUTPUT].setVoltage(q0.active ? q0.voct : 0.f);
+		outputs[QUASAR_GATE_OUTPUT].setVoltage((q0.active && q0.envPhase < midiGate) ? 10.f : 0.f);
 
-		arcMeter += (std::fabs(arc) / 5.f - arcMeter) * 20.f * dt;
-		orbitMeter += (std::fabs(orbit) / 5.f - orbitMeter) * 20.f * dt;
+		pulsarMeter += (std::fabs(pulsar) / 5.f - pulsarMeter) * 20.f * dt;
+		quasarMeter += (std::fabs(quasar) / 5.f - quasarMeter) * 20.f * dt;
 
 		// Nebula animation state.
 		// The glow reads each control's EFFECTIVE value — knob plus CV — so a modulation
@@ -627,7 +600,7 @@ struct Entwine : Module {
 				poly / (float)(2 * VOICES),
 				rootVoct * 0.25f,
 				scaleIdx / (float)(NUM_SCALES - 1),
-				glide, spread, helKnob, wave, env
+				glide, spread, couplingKnob, wave, env
 			};
 			float change = 0.f;
 			for (int i = 0; i < 8; i++) {
@@ -639,11 +612,11 @@ struct Entwine : Module {
 			uiGlow = clampf(uiGlow + change * 4.f - dt * 1.1f, 0.f, 1.f);
 			cloudPhase += dt * 0.35f;
 			if (cloudPhase > 1e6f) cloudPhase = 0.f;
-			uiHel = helKnob;
-			// Arc feeds the left plumes, Orbit the right. In Mono mode Arc carries everything,
+			uiCoupling = couplingKnob;
+			// Pulsar feeds the left plumes, Quasar the right. In mono mode Pulsar carries everything,
 			// so the right side follows it too rather than going dark.
-			uiArc = arcMeter;
-			uiOrbit = mono ? arcMeter : orbitMeter;
+			uiPulsar = pulsarMeter;
+			uiQuasar = mono ? pulsarMeter : quasarMeter;
 		}
 		lightPhase += dt;
 		if (lightPhase >= 0.03f) {
@@ -652,15 +625,13 @@ struct Entwine : Module {
 			lights[SCALE_LIGHT_R].setBrightness(S.colA[0] / 152.f);
 			lights[SCALE_LIGHT_G].setBrightness(S.colA[1] / 152.f);
 			lights[SCALE_LIGHT_B].setBrightness(S.colA[2] / 152.f);
-			lights[ARC_LIGHT].setBrightness(arcMeter);
-			lights[ORBIT_LIGHT].setBrightness(orbitMeter);
+			lights[PULSAR_LIGHT].setBrightness(pulsarMeter);
+			lights[QUASAR_LIGHT].setBrightness(quasarMeter);
 			lights[LOCK_LIGHT].setBrightness(locked ? 1.f : 0.f);
-			// the blue LED slit under the Helicity knob glows with voice activity
-			// and shimmers with the Helicity setting
-			float act = clampf((uiArc + uiOrbit) * 0.7f + uiGlow * 0.4f, 0.f, 1.f);
-			lights[HELIX_LIGHTS + 0].setBrightness(act * (0.35f + 0.65f * uiHel));
-			lights[HELIX_LIGHTS + 1].setBrightness(act);
-			lights[HELIX_LIGHTS + 2].setBrightness(act * (1.f - 0.55f * uiHel));
+			float act = clampf((uiPulsar + uiQuasar) * 0.7f + uiGlow * 0.4f, 0.f, 1.f);
+			lights[COUPLING_LIGHTS + 0].setBrightness(act * (0.35f + 0.65f * uiCoupling));
+			lights[COUPLING_LIGHTS + 1].setBrightness(act);
+			lights[COUPLING_LIGHTS + 2].setBrightness(act * (1.f - 0.55f * uiCoupling));
 		}
 	}
 };
@@ -673,12 +644,12 @@ struct EntwineClouds : Widget {
 
 	void draw(const DrawArgs& args) override {
 		if (!module) return;
-		float lvlL = clampf(module->uiArc, 0.f, 1.f);
-		float lvlR = clampf(module->uiOrbit, 0.f, 1.f);
+		float lvlL = clampf(module->uiPulsar, 0.f, 1.f);
+		float lvlR = clampf(module->uiQuasar, 0.f, 1.f);
 		float g = clampf(module->uiGlow, 0.f, 1.f);
 
-		// Helicity biases the nebula's colour: long notes drift warm, audio-rate goes cold.
-		float warm = clampf(module->uiHel, 0.f, 1.f);
+		// Coupling biases the nebula's colour: long notes drift warm, audio-rate goes cold.
+		float warm = clampf(module->uiCoupling, 0.f, 1.f);
 
 		static const struct { float x, y, r, cr, cg, cb; } BLOBS[] = {
 			{17.f,  70.f,  13.f, 0.97f, 0.65f, 0.78f},
@@ -737,8 +708,7 @@ struct EntwineWidget : ModuleWidget {
 
 		const float X1 = 9.0f, X2 = 25.0f, XC = 40.64f, X4 = 56.3f, X5 = 72.3f;
 
-		// the hardware puts the Lock toggle top-left under the padlock icon, and
-		// the Lock gate jack top-right under the "Lock" label
+		// Lock toggle at top left and its gate input at top right.
 		addParam(createParamCentered<CKSS>(mm2px(Vec(X1, 12.f)), module, Entwine::LOCK_PARAM));
 		addChild(createLightCentered<SmallLight<GreenLight>>(mm2px(Vec(X1 + 6.f, 9.f)), module, Entwine::LOCK_LIGHT));
 
@@ -761,45 +731,44 @@ struct EntwineWidget : ModuleWidget {
 		addParam(createParamCentered<RoundLargeBlackKnob>(mm2px(Vec(X1 + 3.f, 62.f)), module, Entwine::WAVE_PARAM));
 		addParam(createParamCentered<RoundLargeBlackKnob>(mm2px(Vec(X5 - 3.f, 62.f)), module, Entwine::ENV_PARAM));
 
-		addParam(createParamCentered<RoundHugeBlackKnob>(mm2px(Vec(XC, 72.f)), module, Entwine::HELICITY_PARAM));
+		addParam(createParamCentered<RoundHugeBlackKnob>(mm2px(Vec(XC, 72.f)), module, Entwine::COUPLING_PARAM));
 
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(X1 + 3.f, 78.f)), module, Entwine::WAVE_INPUT));
 		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(X5 - 3.f, 78.f)), module, Entwine::ENV_INPUT));
 
-		// reloAd / reloOd CV jacks — the pair flanking the Helicity slot on the hardware
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(29.4f, 87.f)), module, Entwine::RELOAD_INPUT));
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(51.88f, 87.f)), module, Entwine::RELOOD_INPUT));
+		// Independent Pulsar and Quasar Reseed trigger inputs.
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(29.4f, 87.f)), module, Entwine::PULSAR_RESEED_INPUT));
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(51.88f, 87.f)), module, Entwine::QUASAR_RESEED_INPUT));
 
-		// blue LED slit under the Helicity knob, like the hardware's light pipe
+		// Blue activity lights below Coupling.
 		for (int i = 0; i < 3; i++)
 			addChild(createLightCentered<SmallLight<BlueLight>>(
-				mm2px(Vec(XC, 84.9f + i * 2.3f)), module, Entwine::HELIX_LIGHTS + i));
+				mm2px(Vec(XC, 84.9f + i * 2.3f)), module, Entwine::COUPLING_LIGHTS + i));
 
-		// Helicity CV jack (centre)
-		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(XC, 97.f)), module, Entwine::HELICITY_INPUT));
+		// Coupling CV input.
+		addInput(createInputCentered<PJ301MPort>(mm2px(Vec(XC, 97.f)), module, Entwine::COUPLING_INPUT));
 
-		// Bottom row: reloAd (button) | Arc (out) | Orbit (out) | reloOd (button)
-		addParam(createParamCentered<VCVButton>(mm2px(Vec(X1, 112.f)), module, Entwine::RELOAD_PARAM));
-		addParam(createParamCentered<VCVButton>(mm2px(Vec(X5, 112.f)), module, Entwine::RELOOD_PARAM));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(X2, 112.f)), module, Entwine::ARC_OUTPUT));
-		addChild(createLightCentered<SmallLight<YellowLight>>(mm2px(Vec(X2, 104.f)), module, Entwine::ARC_LIGHT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(X4, 112.f)), module, Entwine::ORBIT_OUTPUT));
-		addChild(createLightCentered<SmallLight<YellowLight>>(mm2px(Vec(X4, 104.f)), module, Entwine::ORBIT_LIGHT));
+		// Bottom row: Pulsar Reseed | Pulsar audio | Quasar audio | Quasar Reseed.
+		addParam(createParamCentered<VCVButton>(mm2px(Vec(X1, 112.f)), module, Entwine::PULSAR_RESEED_PARAM));
+		addParam(createParamCentered<VCVButton>(mm2px(Vec(X5, 112.f)), module, Entwine::QUASAR_RESEED_PARAM));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(X2, 112.f)), module, Entwine::PULSAR_OUTPUT));
+		addChild(createLightCentered<SmallLight<YellowLight>>(mm2px(Vec(X2, 104.f)), module, Entwine::PULSAR_LIGHT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(X4, 112.f)), module, Entwine::QUASAR_OUTPUT));
+		addChild(createLightCentered<SmallLight<YellowLight>>(mm2px(Vec(X4, 104.f)), module, Entwine::QUASAR_LIGHT));
 
-		// mono pitch+gate CV outs to drive external gear (Arc left, Orbit right)
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(9.f, 100.f)), module, Entwine::ARC_VOCT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(18.5f, 100.f)), module, Entwine::ARC_GATE_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(63.f, 100.f)), module, Entwine::ORBIT_VOCT_OUTPUT));
-		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.3f, 100.f)), module, Entwine::ORBIT_GATE_OUTPUT));
+		// Mono pitch and gate CV outputs for each stream.
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(9.f, 100.f)), module, Entwine::PULSAR_VOCT_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(18.5f, 100.f)), module, Entwine::PULSAR_GATE_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(63.f, 100.f)), module, Entwine::QUASAR_VOCT_OUTPUT));
+		addOutput(createOutputCentered<PJ301MPort>(mm2px(Vec(72.3f, 100.f)), module, Entwine::QUASAR_GATE_OUTPUT));
 	}
 
 	void appendContextMenu(Menu* menu) override {
 		Entwine* m = dynamic_cast<Entwine*>(module);
 		if (!m) return;
 
-		// SD-card stand-in: the hardware loads buf_wt.wav and scale.txt from SD.
 		menu->addChild(new MenuSeparator);
-		menu->addChild(createMenuLabel("SD card (file loading)"));
+		menu->addChild(createMenuLabel("Custom data"));
 		menu->addChild(createMenuItem(
 			m->wtUserLoaded ? string::f("Wavetable: %d frames (custom)", m->userWtFrames) : "Load wavetable (.wav, 256-sample frames)...",
 			"", [m]() {
@@ -807,7 +776,7 @@ struct EntwineWidget : ModuleWidget {
 				if (path) { m->loadWavetable(path); std::free(path); }
 			}));
 		if (m->wtUserLoaded)
-			menu->addChild(createMenuItem("Restore factory wavetable", "", [m]() {
+			menu->addChild(createMenuItem("Restore default wavetable", "", [m]() {
 				m->wtUserLoaded = false; m->userWtFrames = 0; m->wtPath.clear();
 			}));
 		menu->addChild(createMenuItem(
@@ -817,12 +786,12 @@ struct EntwineWidget : ModuleWidget {
 				if (path) { m->loadScales(path); std::free(path); }
 			}));
 		if (m->scalesUserLoaded)
-			menu->addChild(createMenuItem("Restore factory scales", "", [m]() {
+			menu->addChild(createMenuItem("Restore default scales", "", [m]() {
 				m->scalesUserLoaded = false; m->scalePath.clear();
 			}));
 
 		menu->addChild(new MenuSeparator);
-		menu->addChild(createMenuLabel("MIDI output (Arc=ch1, Orbit=ch2)"));
+		menu->addChild(createMenuLabel("MIDI output (Pulsar=ch1, Quasar=ch2)"));
 		menu->addChild(createSubmenuItem("Driver", "", [m](Menu* sub) {
 			for (int id : midi::getDriverIds())
 				sub->addChild(createCheckMenuItem(midi::getDriver(id)->getName(), "",
@@ -845,13 +814,11 @@ struct EntwineWidget : ModuleWidget {
 		}));
 
 		menu->addChild(new MenuSeparator);
-		// "Each group of 8 wavetables = 1 Entwine preset"; on the hardware you press and turn
-		// the Scale knob to pick one, which Rack knobs cannot do.
 		menu->addChild(createIndexPtrSubmenuItem("Wavetable preset",
 			{"1", "2", "3", "4", "5", "6", "7", "8"}, &m->wtPreset));
 
 		menu->addChild(new MenuSeparator);
-		menu->addChild(createMenuLabel("Expander params (Cuh / MIDI CC 28-32)"));
+		menu->addChild(createMenuLabel("Voice shaping"));
 
 		menu->addChild(createIndexPtrSubmenuItem("Filter type",
 			{"Off", "Low-pass", "Band-pass", "High-pass"}, &m->filterType));
